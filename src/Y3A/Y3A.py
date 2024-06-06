@@ -1555,7 +1555,7 @@ class CloudFormation_StackResource(awsObject):
 
     @staticmethod
     def form_id(resp, id_field):
-        PhysicalResourceId = resp["PhysicalResourceId"]
+        PhysicalResourceId = resp["PhysicalResourceId"] if "PhysicalResourceId" in resp else ""
         PhysicalResourceId = PhysicalResourceId.replace(ID_DV, "_")
         PhysicalResourceId = PhysicalResourceId.replace(":", "_")
         return f"{resp["StackName"]}{ID_DV}{PhysicalResourceId}"
@@ -1563,17 +1563,15 @@ class CloudFormation_StackResource(awsObject):
     def __init__(self, aws, id_query, index, resp, do_auto_save=True):
         super().__init__(aws, id_query, index, resp, do_auto_save)
 
-        PhysicalResourceId = self.PhysicalResourceId
-        PhysicalResourceId = PhysicalResourceId.replace(ID_DV, "_")
-        PhysicalResourceId = PhysicalResourceId.replace(":", "_")
+        PhysicalResourceId = resp["PhysicalResourceId"] if "PhysicalResourceId" in resp else ""
 
-        self.View = f"{self.ResourceType.replace('AWS::', '')}::{self.PhysicalResourceId}"
+        self.View = f"{self.ResourceType.replace('AWS::', '')}::{PhysicalResourceId}"
 
         self.ResourceType = str_to_class(self.ResourceType)
 
         if self.ResourceType == ECS_Service:
-            self.PhysicalResourceId = f"{PhysicalResourceId.split(':')[-1].split('/')[-2]}|{PhysicalResourceId.split(':')[-1].split('/')[-1]}"
-
+            parts = PhysicalResourceId.split('/')
+            self.PhysicalResourceId = f"{parts[-2]}|{parts[-1]}"
 
     def get_actual_field_type(self, field):
         if field == 'PhysicalResourceId':
@@ -2110,4 +2108,4 @@ class Y3A(ObjectModel):
             }
         )
 
-        self.Classes["All"] = [x for x in self.Classes["ALL"] if x not in [EC2_Reservation, AWS_AMI, AWS_Region, AWS_AvailabilityZone, EC2_KeyPair, EC2_SecurityGroup, EC2_SecurityGroup_Rule]]
+        self.Classes["All"] = [x for x in self.Classes["ALL"] if x not in [EC2_Reservation, AWS_AMI, AWS_Region, AWS_AvailabilityZone, EC2_KeyPair, EC2_SecurityGroup, EC2_SecurityGroup_Rule, IAM_Role]]
