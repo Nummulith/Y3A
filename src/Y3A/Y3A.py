@@ -232,7 +232,7 @@ class EC2_Instance(awsObject):
                     'Tags' : ({"Key" : "Value"}),
                     'VpcId': EC2_VPC,
                     'KeyPairId': (EC2_KeyPair, FIELD.LINK_IN),
-                    'SecurityGroups': [EC2_SecurityGroup]
+                    # 'SecurityGroups': [EC2_SecurityGroupSecurityGroups]  ToDo
                 }
     
     @staticmethod
@@ -259,7 +259,7 @@ class EC2_Instance(awsObject):
                     'SubnetId': SubnetId,
                     'DeviceIndex': 0,
                     'AssociatePublicIpAddress': True if PrivateIpAddress is not None else False,
-                    'PrivateIpAddress': PrivateIpAddress,
+                    'PrivateIpAddress': PrivateIpAddress, # todo - PrivateIpAddress vs PublicIpAddress
                     'Groups': Groups,
                 }
             ],
@@ -983,15 +983,18 @@ class EC2_KeyPair(awsObject):
         response = bt('ec2').describe_key_pairs(**idpar(('KeyPairIds', id), PAR.LIST))
         return response['KeyPairs']
 
+    def get_view(self):
+        return f"{self.KeyName}"
+
 
     @staticmethod
-    def create(name):
-        KeyName = f"{EC2_KeyPair.Prefix}-{name}"
-        resp = bt('ec2').create_key_pair(KeyName=KeyName)
+    def create(name, path):
+        # KeyName = f"{EC2_KeyPair.Prefix}-{name}"
+        resp = bt('ec2').create_key_pair(KeyName=name)
 
         private_key = resp['KeyMaterial']
         try:
-            with open(f'PrivateKeys\\{KeyName}.pem', 'w') as key_file: key_file.write(private_key)
+            with open(path, 'w') as key_file: key_file.write(private_key)
         except Exception as e:
             print(f"EC2_KeyPair.create: An exception occurred: {type(e).__name__} - {e}")
 
@@ -1005,7 +1008,7 @@ class EC2_KeyPair(awsObject):
 
     @staticmethod
     def IdToName(KeyPairId):
-    #   KeyName = boto3.resource('ec2').EC2_KeyPair(KeyPairId).key_name # does not work
+    #   KeyName = bt('ec2').EC2_KeyPair(KeyPairId).key_name # does not work
         resp = bt('ec2').describe_key_pairs(KeyPairIds=[KeyPairId])
         KeyName = resp['KeyPairs'][0]['KeyName']
         return KeyName
@@ -1015,9 +1018,6 @@ class EC2_KeyPair(awsObject):
         resp = bt('ec2').describe_key_pairs(KeyNames=[name])
         KeyPairId = resp['KeyPairs'][0]['KeyPairId']
         return KeyPairId
-
-    def get_view(self):
-        return f"{self.KeyName}"
 
 
 class SNS_Topic(awsObject):
@@ -1193,8 +1193,8 @@ class RDS_DBInstance(awsObject):
     def __init__(self, aws, id_query, index, resp, do_auto_save=True):
         super().__init__(aws, id_query, index, resp, do_auto_save)
 
-        if hasattr(self, "RDS_DBSubnetGroup"):
-            setattr(self, "DBSubnetGroupName", self.RDS_DBSubnetGroup["DBSubnetGroupName"])
+        if hasattr(self, "DBSubnetGroup"):
+            setattr(self, "DBSubnetGroupName", self.DBSubnetGroup["DBSubnetGroupName"])
     
     @staticmethod
     def create(name, DBSubnetGroupName, IAM_User, Pass):
@@ -1243,7 +1243,7 @@ class RDS_DBSubnetGroup(awsObject):
             DBSubnetGroupDescription=DBSubnetGroupDescription,
             SubnetIds = SubnetIds
         )
-        return response['RDS_DBSubnetGroup']['DBSubnetGroupName']
+        return response['DBSubnetGroup']['DBSubnetGroupName']
 
     @staticmethod
     def delete(id):
@@ -1527,9 +1527,18 @@ class CloudFormation_Stack(awsObject):
     @staticmethod
     def create(stack_name, template_body, parameters = None):
         cf_pars = [{'ParameterKey': key, 'ParameterValue': value} for key, value in parameters.items()] if parameters != None else []
-        response = boto3.client('cloudformation').create_stack(StackName=stack_name, TemplateBody=template_body, Parameters=cf_pars, Capabilities=['CAPABILITY_IAM'])
+        response = bt('cloudformation').create_stack(StackName=stack_name, TemplateBody=template_body, Parameters=cf_pars, Capabilities=['CAPABILITY_IAM'])
 
         Wait('cloudformation', 'stack_create_complete', "StackName", stack_name)
+
+        return stack_name
+    
+    @staticmethod
+    def update(stack_name, template_body, parameters = None):
+        cf_pars = [{'ParameterKey': key, 'ParameterValue': value} for key, value in parameters.items()] if parameters != None else []
+        response = bt('cloudformation').update_stack(StackName=stack_name, TemplateBody=template_body, Parameters=cf_pars, Capabilities=['CAPABILITY_IAM'])
+
+        Wait('cloudformation', 'stack_update_complete', "StackName", stack_name)
 
         return stack_name
 
@@ -1589,7 +1598,7 @@ class CloudFormation_StackResource(awsObject):
         res = []
         for stack in CloudFormation_Stack.aws_get_objects(StackId):
             for resource in bt('cloudformation').describe_stack_resources(**idpar(('StackName', stack['StackName'])))['StackResources']:
-                if StackResourceId and resource['PhysicalResourceId'] != StackResourceId:
+                if StackResourceId and StackResourceId != "*" and resource['PhysicalResourceId'] != StackResourceId:
                     continue
                 res.append(resource)
 
@@ -2062,6 +2071,53 @@ class ECS_Task_Container(awsObject):
         return ECS_Task.get_objects_by_index(id, "containers", "name")
 
 
+class EC2_VPCPeeringConnection(awsObject):
+    Prefix = "pcx"
+
+    @staticmethod
+    def fields():
+        return {
+            'VpcPeeringConnectionId': (EC2_VPCPeeringConnection, FIELD.ID),
+            'AccepterVpc': (EC2_VPC, FIELD.LINK_IN),
+            'RequesterVpc': (EC2_VPC, FIELD.LINK_IN),
+        }
+
+    def __init__(self, aws, id_query, index, resp, do_auto_save=True):
+        super().__init__(aws, id_query, index, resp, do_auto_save)
+        self.AccepterVpc  = self.AccepterVpcInfo ["VpcId"]
+        self.RequesterVpc = self.RequesterVpcInfo["VpcId"]
+
+    @staticmethod
+    def aws_get_objects(id = None):
+        resp = bt('ec2').describe_vpc_peering_connections(**idpar({"VpcPeeringConnectionIds": id}, PAR.LIST))
+        return resp["VpcPeeringConnections"]
+
+    @staticmethod
+    def create(VpcId, PeerVpcId, name):
+        id = bt('ec2').create_vpc_peering_connection(VpcId=VpcId, PeerVpcId=PeerVpcId)['VpcPeeringConnection']["VpcPeeringConnectionId"]
+        Tag.create(id, "Name", f"{EC2_VPCPeeringConnection.Prefix}-{name}")
+        return id
+    
+    @staticmethod
+    def delete(id):
+        resp = bt('ec2').delete_vpc_peering_connection(VpcPeeringConnectionId=id)
+        return
+    
+
+class EC2_VPCEndpoint(awsObject):
+    @staticmethod
+    def fields():
+        return {
+            'VpcEndpointId': (EC2_VPCEndpoint, FIELD.ID),
+            'VpcId': (EC2_VPC, FIELD.LINK_IN),
+        }
+
+    @staticmethod
+    def aws_get_objects(id = None):
+        resp = bt('ec2').describe_vpc_endpoints(**idpar({"VpcEndpointIds": id}, PAR.LIST))
+        return resp['VpcEndpoints']
+
+
 class Y3A(ObjectModel):
     def __init__(self, profile, path, do_auto_load = True, do_auto_save = True):
 
@@ -2090,7 +2146,10 @@ class Y3A(ObjectModel):
             {
                 'IAM'     : [IAM_User, IAM_Group, IAM_Role],
                 'VPC'     : [EC2_KeyPair, EC2_VPC, EC2_InternetGateway, EC2_VPCGatewayAttachment],
-                'SN'      : [EC2_Subnet, EC2_RouteTable, EC2_Route, EC2_RouteTable_Association, EC2_EIP, EC2_NatGateway, EC2_EIPAssociation],
+                'SN'      : [EC2_Subnet],
+                'RT'      : [EC2_RouteTable, EC2_Route, EC2_RouteTable_Association],
+                'EIP'     : [EC2_EIP, EC2_EIPAssociation],
+                'NW'      : [EC2_NatGateway, EC2_VPCEndpoint, EC2_VPCPeeringConnection],
                 'SG'      : [EC2_SecurityGroup, EC2_SecurityGroup_Rule],
                 'NACL'    : [EC2_NetworkAcl, EC2_NetworkAclEntry],
                 'EC2'     : [AWS_AMI, EC2_Instance, EC2_Reservation, EC2_NetworkInterface, EC2_Instance_NetworkInterface],
@@ -2108,4 +2167,4 @@ class Y3A(ObjectModel):
             }
         )
 
-        self.Classes["All"] = [x for x in self.Classes["ALL"] if x not in [EC2_Reservation, AWS_AMI, AWS_Region, AWS_AvailabilityZone, EC2_KeyPair, EC2_SecurityGroup, EC2_SecurityGroup_Rule, IAM_Role]]
+        self.Classes["All"] = [x for x in self.Classes["ALL"] if x not in [EC2_Reservation, AWS_AMI, AWS_Region, AWS_AvailabilityZone, EC2_KeyPair, EC2_SecurityGroup, EC2_SecurityGroup_Rule, IAM_Role, Logs_LogGroup]]
