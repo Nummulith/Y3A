@@ -2126,16 +2126,18 @@ class EC2_VPCEndpoint(awsObject):
     @staticmethod
     def create(VpcId, RouteTableId, VpcEndpointType, ServiceName):
         try:
-            response = ec2.create_vpc_endpoint(
+            response = bt('ec2').create_vpc_endpoint(
                 VpcEndpointType=VpcEndpointType, # 'Gateway'/'Interface'
                 VpcId=VpcId,
                 ServiceName=ServiceName,
                 RouteTableIds=[RouteTableId],
             )
+        except Exception as e:
+            print(f"Cannot create endpoint: {e}")
 
     @staticmethod
     def delete(id):
-        resp = ec2.delete_vpc_endpoints(
+        resp = bt('ec2').delete_vpc_endpoints(
                 VpcEndpointIds=[id]
             )
 
@@ -2162,7 +2164,7 @@ class Y3A(ObjectModel):
     def get_cf_res(self, listname, criteria, par = None) -> str:
         list = listname
         if type(list) is str:
-            list = fetch_cf_res_list(self, list)
+            list = self.fetch_cf_res_list(list)
 
         for res in list:
             if criteria(self, res, par):
