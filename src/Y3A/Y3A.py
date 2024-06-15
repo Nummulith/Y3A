@@ -893,7 +893,6 @@ class EC2_NetworkInterface(awsObject):
 class S3_Bucket(awsObject): 
     Prefix = "s3"
     Icon = "Arch_Amazon-Simple-Storage-Service_48"
-    DoNotFetch = True
 
     @staticmethod
     def fields():
@@ -907,8 +906,8 @@ class S3_Bucket(awsObject):
             response = bt('s3').list_buckets()
             return response['Buckets']
         else:
-            response = bt('s3').head_bucket(Bucket=id)
-            return [response]
+            # response = bt('s3').head_bucket(Bucket=id)
+            return [{ "Name" : id }]
 
     def upload_file(id, s3_key, file_path):
         response = bt('s3').upload_file(file_path, id, s3_key, ExtraArgs={'ContentType': 'text/html'})
@@ -990,21 +989,28 @@ class EC2_KeyPair(awsObject):
     @staticmethod
     def create(name, path):
         # KeyName = f"{EC2_KeyPair.Prefix}-{name}"
-        resp = bt('ec2').create_key_pair(KeyName=name)
 
+        resp = bt('ec2').create_key_pair(KeyName=name)
         private_key = resp['KeyMaterial']
+
         try:
             with open(path, 'w') as key_file: key_file.write(private_key)
         except Exception as e:
             print(f"EC2_KeyPair.create: An exception occurred: {type(e).__name__} - {e}")
 
         id = resp['KeyPairId']
-
         return id
     
     @staticmethod
-    def delete(id):
+    def delete(id, path):
         bt('ec2').delete_key_pair(KeyPairId = id)
+
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception as e:
+            print(f"EC2_KeyPair.delete: An exception occurred: {type(e).__name__} - {e}")
+
 
     @staticmethod
     def IdToName(KeyPairId):
@@ -2117,8 +2123,53 @@ class EC2_VPCEndpoint(awsObject):
         resp = bt('ec2').describe_vpc_endpoints(**idpar({"VpcEndpointIds": id}, PAR.LIST))
         return resp['VpcEndpoints']
 
+    @staticmethod
+    def create(VpcId, RouteTableId, VpcEndpointType, ServiceName):
+        try:
+            response = ec2.create_vpc_endpoint(
+                VpcEndpointType=VpcEndpointType, # 'Gateway'/'Interface'
+                VpcId=VpcId,
+                ServiceName=ServiceName,
+                RouteTableIds=[RouteTableId],
+            )
+
+    @staticmethod
+    def delete(id):
+        resp = ec2.delete_vpc_endpoints(
+                VpcEndpointIds=[id]
+            )
+
 
 class Y3A(ObjectModel):
+    def fetch_cf_res_list(self, stack):
+        do_auto_save_after = self.do_auto_save
+        self.do_auto_save = False
+
+        result = []
+        for res in self.CloudFormation_StackResource.fetch(f"{stack}|*"):
+            if res.ResourceType == None:
+                continue
+            try: # to do ..
+                result.append(self[res.ResourceType].fetch(res.PhysicalResourceId)[0])
+            except Exception as e:
+                print(f"Cannot get object: {res.ResourceType} - {res.PhysicalResourceId} - {e}")
+
+        self.save()
+        self.do_auto_save = do_auto_save_after
+
+        return result
+
+    def get_cf_res(self, listname, criteria, par = None) -> str:
+        list = listname
+        if type(list) is str:
+            list = fetch_cf_res_list(self, list)
+
+        for res in list:
+            if criteria(self, res, par):
+                return res
+        
+        return None
+
     def __init__(self, profile, path, do_auto_load = True, do_auto_save = True):
 
         setattr(Y3A, "PROFILE", profile)
