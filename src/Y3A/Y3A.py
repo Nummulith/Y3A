@@ -2168,6 +2168,8 @@ class ECS_Task_Container(awsObject):
 
 class EC2_VPCPeeringConnection(awsObject):
     Prefix = "pcx"
+    Color = COLOR.BLUE_DARK
+    Icon = "EC2_VPCPeeringConnection"
 
     @staticmethod
     def fields():
@@ -2200,6 +2202,9 @@ class EC2_VPCPeeringConnection(awsObject):
     
 
 class EC2_VPCEndpoint(awsObject):
+    Icon = "EC2_VPCEndpoint"
+    Color = COLOR.BLUE_DARK
+
     @staticmethod
     def fields():
         return {
