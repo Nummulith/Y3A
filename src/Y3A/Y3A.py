@@ -21,6 +21,7 @@ import io
 import zipfile
 import json
 import stat
+import time
 
 from ObjectModelFramework import *
 
@@ -46,11 +47,21 @@ class COLOR:
 
 
 def bt(aws_service):
-    return boto3.Session(
-        profile_name = Y3A.PROFILE
-    ).client(
-        aws_service
-    )
+    if getattr(Y3A, "CLIENTS", None) == None:
+        setattr(Y3A, "CLIENTS", {})
+    
+    if not aws_service in Y3A.CLIENTS:
+        client = boto3.Session(
+            profile_name = Y3A.PROFILE
+        ).client(
+            aws_service
+        )
+        Y3A.CLIENTS[aws_service] = client
+
+    else:
+        client = Y3A.CLIENTS[aws_service]
+
+    return client
 
 def Id17(id):
     return id[-17:]
@@ -765,9 +776,9 @@ class EC2_Route(awsObject):
     def fields():
         return {
                     'ListName'             : (EC2_RouteTable      , FIELD.LIST_NAME),
-                    "_parent"             : (EC2_RouteTable      , FIELD.LIST_ITEM),
+                    "_parent"              : (EC2_RouteTable      , FIELD.LIST_ITEM),
                     "GatewayId"            : (EC2_InternetGateway , FIELD.LINK),
-                    "InstanceId"           : (EC2_Instance     , FIELD.LINK),
+                    "InstanceId"           : (EC2_Instance        , FIELD.LINK),
                     "NatGatewayId"         : (EC2_NatGateway      , FIELD.LINK),
                     "NetworkInterfaceId"   : (EC2_NetworkInterface, FIELD.LINK),
                 }
@@ -777,17 +788,30 @@ class EC2_Route(awsObject):
         return EC2_RouteTable.get_objects_by_index(id, "Routes", int)
     
     @staticmethod
+    def destination(resp):
+        for attr in ["DestinationCidrBlock", "DestinationPrefixListId"]:
+            if type(resp) is dict:
+                if attr in resp:
+                    return (attr, resp[attr])
+            else: # class
+                if hasattr(resp, attr):
+                    return (attr, getattr(resp, attr))
+
+        print(f"EC2_Route.destination: {resp}")
+        return ("-", "-")
+
+    @staticmethod
     def form_id(resp, id_field):
-        return f"{resp["_parent"]}{ID_DV}{resp["DestinationCidrBlock"]}"
+        return f"{resp["_parent"]}{ID_DV}{EC2_Route.destination(resp)[1]}"
 
     def get_view(self):
         if hasattr(self, "GatewayId_local"):
             return 'local'
 
-        return f"{getattr(self, 'DestinationCidrBlock', '-')}"
+        return EC2_Route.destination(self)[1]
 
     def get_ext(self):
-        return f"{getattr(self, 'DestinationCidrBlock', '-')}"
+        return EC2_Route.destination(self)[1]
 
     def __init__(self, aws, id_query, index, resp, do_auto_save=True):
         super().__init__(aws, id_query, index, resp, do_auto_save)
@@ -1096,6 +1120,46 @@ class IAM_Role(awsObject):
             response = bt('iam').get_role(RoleName=id)
             return [response['Role']]
 
+    @staticmethod
+    def create(name):
+        btaim = bt('iam')
+
+        role_policy_document = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {
+                        "Service": "lambda.amazonaws.com"
+                    },
+                    "Action": "sts:AssumeRole"
+                }
+            ]
+        }
+
+        resp = btaim.create_role(
+            RoleName=name,
+            AssumeRolePolicyDocument=json.dumps(role_policy_document),
+            Description='Role to execute my Lambda function'
+        )
+
+        btaim.attach_role_policy(
+            RoleName = name,
+            PolicyArn = 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        )
+
+        return resp['Role']['RoleName']
+    
+    @staticmethod
+    def delete(id):
+        btiam = bt('iam')
+
+        attached_policies = btiam.list_attached_role_policies(RoleName = id)['AttachedPolicies']
+        for policy in attached_policies:
+            btiam.detach_role_policy(RoleName = id, PolicyArn=policy['PolicyArn'])
+
+        btiam.delete_role(RoleName = id)
+
 
 class Lambda_Function(awsObject):
     Icon = "Arch_AWS-Lambda_48"
@@ -1138,29 +1202,54 @@ class Lambda_Function(awsObject):
             return zip_buffer.getvalue()
 
     @staticmethod
-    def create(name, code, role_arn):
+    def create(name, code, role_arn = None):
         handler = 'lambda_function.lambda_handler'
         runtime = 'python3.12'
         zipped_data = Lambda_Function.str_to_zipped_data(code)
 
-        response = bt('lambda').create_function(
-            FunctionName=name,
-            Runtime=runtime,
-            Role=role_arn,
-            Handler=handler,
-            Code={'ZipFile': zipped_data},
-            Timeout=30,
-            MemorySize=128,
-        )        
+        params = {
+            "FunctionName": name,
+            "Runtime": runtime,
+            "Handler": handler,
+            "Code": {'ZipFile': zipped_data},
+            "Timeout": 30,
+            "MemorySize": 128,
+            "Role": role_arn
+        }
+
+        response = bt('lambda').create_function(**params)
         return response['FunctionName']
     
-    @staticmethod
-    def delete(id):
-        bt('lambda').delete_function(FunctionName=id)
+    def wait_for_update(self, delay=1, max_attempts=15):
+        btlambda = bt('lambda')
 
-    def invoke(id, payload):
+        attempts = 0
+        while attempts < max_attempts:
+            response = btlambda.get_function(FunctionName=self.FunctionName)
+            status = response['Configuration']['LastUpdateStatus']
+            if status == 'Successful':
+                return
+            elif status == 'Failed':
+                raise Exception("Function update failed.")
+            else:
+                time.sleep(delay)
+                attempts += 1
+        raise Exception("Function update did not complete within the expected time.")        
+
+    def update_code(self, code):
+        zipped_data = Lambda_Function.str_to_zipped_data(code)
+
+        response = bt('lambda').update_function_code(
+            FunctionName=self.FunctionName,
+            ZipFile=zipped_data,
+            Publish=True  # Set to True to publish a new version of the Lambda function
+        )
+
+        self.wait_for_update()
+
+    def invoke(self, payload):
         response = bt('lambda').invoke(
-            FunctionName=id,
+            FunctionName=self.FunctionName,
             InvocationType='RequestResponse',  # or 'Event' for async call
             Payload=str(payload).replace("'",'"')
         )
@@ -1169,14 +1258,9 @@ class Lambda_Function(awsObject):
         result = json.loads(result)
         return result
     
-    def update_code(id, code):
-        zipped_data = Lambda_Function.str_to_zipped_data(code)
-
-        response = bt('lambda').update_function_code(
-            FunctionName=id,
-            ZipFile=zipped_data,
-            Publish=True  # Set to True to publish a new version of the Lambda function
-        )
+    @staticmethod
+    def delete(id):
+        bt('lambda').delete_function(FunctionName=id)
 
 
 class RDS_DBInstance(awsObject):
@@ -1345,7 +1429,7 @@ class AWS_AMI(awsObject):
         #     {'Name': 'owner-id', 'Values': ['your_account_id']},
         #     {'Name': 'state', 'Values': ['available']}
         # ]
-        response = bt('ec2').describe_images(**idpar(('ImageIds', id), PAR.LIST))
+        response = bt('ec2').describe_images(**idpar([('ImageIds', id), ('owner-id', "1234")], PAR.LIST))  # todo 
         return response["Images"]
 
 
@@ -1864,17 +1948,19 @@ class ECR_Repository(awsObject):
 class ECR_Repository_Image(awsObject):
     Icon = "Arch_Amazon-Elastic-Container-Registry_48"
     Color = COLOR.ORANGE
+    ListName = "Images"
 
     @staticmethod
     def fields():
         return {
-            '_parent': (ECR_Repository, FIELD.OWNER),
+            "ListName" : (str, FIELD.LIST_NAME),
+            '_parent': (ECR_Repository, FIELD.LIST_ITEM),
             'imageTag': (str, FIELD.VIEW),
         }
 
     @staticmethod
     def form_id(resp, id_field):
-        return f"{resp["_parent"]}{ID_DV}{resp["imageTag"]}"
+        return f"{resp["_parent"]}{ID_DV}{resp["imageDigest"].replace(":", "_")}"
 
     @staticmethod
     def aws_get_objects(id = None):
@@ -2044,6 +2130,9 @@ class ECS_Task(awsObject):
         else:
             ids = [id]
 
+        if len(ids) == 0:
+            return []
+
         resp = srv.describe_tasks(
             cluster=cluster,
             tasks=ids
@@ -2205,7 +2294,7 @@ class Y3A(ObjectModel):
                 'NW'      : [EC2_NatGateway, EC2_VPCEndpoint, EC2_VPCPeeringConnection],
                 'SG'      : [EC2_SecurityGroup, EC2_SecurityGroup_Rule],
                 'NACL'    : [EC2_NetworkAcl, EC2_NetworkAclEntry],
-                'EC2'     : [AWS_AMI, EC2_Instance, EC2_Reservation, EC2_NetworkInterface, EC2_Instance_NetworkInterface],
+                'EC2'     : [EC2_Instance, EC2_Reservation, EC2_NetworkInterface, EC2_Instance_NetworkInterface], # AWS_AMI, 
                 'RDS'     : [RDS_DBSubnetGroup, RDS_DBSubnetGroup_Subnet, RDS_DBInstance, DynamoDB_Table],
                 'ELB'     : [ELB_LoadBalancer, ELB_LoadBalancer_AvailabilityZone, ELB_TargetGroup, ELB_Listener, AutoScaling_LaunchConfiguration, AutoScaling_AutoScalingGroup],
                 'RAZ'     : [AWS_Region, AWS_AvailabilityZone],
@@ -2220,4 +2309,5 @@ class Y3A(ObjectModel):
             }
         )
 
-        self.Classes["All"] = [x for x in self.Classes["ALL"] if x not in [EC2_Reservation, AWS_AMI, AWS_Region, AWS_AvailabilityZone, EC2_KeyPair, EC2_SecurityGroup, EC2_SecurityGroup_Rule, IAM_Role, Logs_LogGroup]]
+        self.Classes["All"] = [x for x in self.Classes["ALL"] if x not in [EC2_Reservation, AWS_AMI, AWS_Region, AWS_AvailabilityZone]]
+        self.Classes["TS"] = [x for x in self.Classes["All"] if x not in [IAM_User, IAM_Group, IAM_Role, EC2_KeyPair, EC2_SecurityGroup, EC2_SecurityGroup_Rule, Logs_LogGroup]]
