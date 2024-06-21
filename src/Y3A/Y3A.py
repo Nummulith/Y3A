@@ -150,7 +150,29 @@ class awsObject(ObjectModelItem):
 
     def get_view(self):
         '''Getting view of object'''
-        return f"{getattr(self, 'Tag_Name', super().get_view())}"
+
+        view = f"{getattr(self, 'Tag_Name', super().get_view())}"
+        return view
+    
+    def get_href(self):
+        wrap = self.html_wrap()
+        if wrap == "":
+            return ""
+        
+        url  = wrap.format(self = self, region = "eu-central-1") # TODO region
+        href = f'HREF="{url}" TARGET="_blank"'
+        return href
+
+    def html_wrap(self):
+        return ""
+
+    @classmethod
+    def html_root(cls):
+        return "https://{region}.console.aws.amazon.com/"
+
+    @classmethod
+    def html_home(cls, client):
+        return awsObject.html_root() + "{client}/home?region={region}#".format(client = client, region = "{region}")
 
     def get_icon(self):
         icon = super().get_icon()
@@ -946,6 +968,10 @@ class S3_Bucket(awsObject):
             for obj in response['Contents']:
                 s3.delete_object(Bucket=id, Key=obj['Key'])
 
+    def html_wrap(self):
+        region = "{region}"
+        return awsObject.html_root() + f"s3/buckets/{self.Name}" # ?region={region}&bucketType=general&tab=objects
+
 
 class EC2_EIP(awsObject):
     Prefix = "eipassoc"
@@ -1076,6 +1102,10 @@ class SNS_Topic(awsObject):
 
         return []
     
+    def html_wrap(self):
+        return awsObject.html_home("sns") + f"/topic/{self.TopicArn}"
+
+
 
 class CloudTrail_Trail(awsObject):
     Color = COLOR.RED
@@ -1099,6 +1129,9 @@ class CloudTrail_Trail(awsObject):
         response = bt('cloudtrail').describe_trails(**idpar(('trailNameList', id), PAR.LIST))
         return response['trailList']
 
+    def html_wrap(self):
+        return awsObject.html_home("cloudtrailv2") + f"/trails/{self.TrailARN}"
+
 
 class KMS_Key(awsObject):
     Color = COLOR.CRIMSON
@@ -1117,7 +1150,10 @@ class KMS_Key(awsObject):
             return response['Keys']
         else:
             response = bt('kms').describe_key(KeyId=id)
-            return response['KeyMetadata']
+            return [response['KeyMetadata']]
+
+    def html_wrap(self):
+        return awsObject.html_home("kms") + f"/kms/keys/{self.KeyId}"
 
 
 class IAM_User(awsObject):
@@ -1139,6 +1175,10 @@ class IAM_User(awsObject):
             response = bt('iam').get_user(UserName=id)
             return [response['User']]
 
+    def html_wrap(self):
+        return awsObject.html_home("iam") + f"/users/details/{self.IAM_User}"
+
+
 
 class IAM_Group(awsObject):
     Icon = "Res_Users_48_Light"
@@ -1158,6 +1198,9 @@ class IAM_Group(awsObject):
         else:
             response = bt('iam').get_group(GroupName=id)
             return [response['Group']]
+
+    def html_wrap(self):
+        return awsObject.html_home("iam") + f"/groups/details/{self.IAM_Group}"
 
 
 class IAM_Role(awsObject):
@@ -1208,6 +1251,11 @@ class IAM_Role(awsObject):
         )
 
         return resp['Role']['RoleName']
+    
+    def html_wrap(self):
+        # "https://us-east-1.console.aws.amazon.com/iam/home?region=eu-central-1#/roles/details/management-events-cloud-trail-role?section=permissions"
+        return awsObject.html_home("iam") + f"/roles/details/{self.RoleName}"
+
     
     @staticmethod
     def delete(id):
@@ -1320,6 +1368,9 @@ class Lambda_Function(awsObject):
     @staticmethod
     def delete(id):
         bt('lambda').delete_function(FunctionName=id)
+
+    def html_wrap(self):
+        return awsObject.html_home("lambda") + f"/functions/{self.FunctionName}"
 
 
 class RDS_DBInstance(awsObject):
@@ -1699,6 +1750,10 @@ class CloudFormation_Stack(awsObject):
 
         return
 
+    def html_wrap(self):
+        return awsObject.html_home("cloudformation") + f"/stacks/stackinfo?stackId={self.StackId}"
+    
+
 class CloudFormation_StackResource(awsObject):
     ListName = "Resources"
 
@@ -1775,6 +1830,9 @@ class ApiGateway_RestApi(awsObject):
             del response['ResponseMetadata']
             return [response]
         
+    def html_wrap(self):
+        return awsObject.html_root() + f"/apigateway/main/apis/{self.id}"
+
 
 class ApiGateway_Resource(awsObject):
     Icon = "Arch_Amazon-API-Gateway_48-Resource"
@@ -2051,6 +2109,10 @@ class ECS_Cluster(awsObject):
         else:
             return bt('ecs').describe_clusters(**idpar({ "clusters": id if isinstance(id, list) else [id] }))['clusters']
 
+    def html_wrap(self):
+        res = awsObject.html_root() + f"/ecs/v2/clusters/{self.clusterName}"
+        return res
+
 
 class ECS_Service(awsObject):
     Icon = "Arch_Amazon-Elastic-Container-Service_48"
@@ -2085,6 +2147,10 @@ class ECS_Service(awsObject):
 
         return resp["services"]
     
+    def html_wrap(self):
+        res = awsObject.html_root() + f"/ecs/v2/clusters/{self._parent}/services/{self.serviceName}"
+        return res
+
 
 class ECS_TaskDefinition_Family(awsObject):
     Icon = "Arch_Amazon-Elastic-Container-Service_48"
@@ -2198,6 +2264,11 @@ class ECS_Task(awsObject):
         )
 
         return resp["tasks"]
+    
+    def html_wrap(self):
+        "wind/services/wind-service/tasks?region=eu-central-1"
+        res = awsObject.html_home("kms") + f"/ecs/v2/clusters/"
+        return "" # TODO
 
 
 class ECS_Task_Container(awsObject):
@@ -2293,6 +2364,10 @@ class EC2_VPCEndpoint(awsObject):
         resp = bt('ec2').delete_vpc_endpoints(
                 VpcEndpointIds=[id]
             )
+        
+    def html_wrap(self):
+        url = awsObject.html_home("vpcconsole") + f"EndpointDetails:vpcEndpointId={self.VpcEndpointId}"
+        return url
 
 
 class Y3A(ObjectModel):
