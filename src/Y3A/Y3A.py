@@ -44,7 +44,7 @@ class COLOR:
     LILA      = "#f2c4f4"
     BLUE      = "#d7c1ff"
     BLUE_DARK = "#c19fff"
-
+    CRIMSON   = "#F2B3BC"
 
 def bt(aws_service):
     if getattr(Y3A, "CLIENTS", None) == None:
@@ -664,7 +664,6 @@ class EC2_NetworkAclEntry(awsObject):
     Prefix = "nacle"
     Icon = "NetworkAccessControlList"
     Color = COLOR.BLUE_DARK
-    DoNotFetch = True
     ListName = "Entries"
 
     @staticmethod
@@ -769,7 +768,6 @@ class EC2_Route(awsObject):
     Icon = "Route"
     Color = COLOR.BLUE_DARK
     UseIndex = True
-    DoNotFetch = True
     ListName = "Routes"
 
     @staticmethod
@@ -1051,13 +1049,75 @@ class EC2_KeyPair(awsObject):
 
 
 class SNS_Topic(awsObject):
-    DoNotFetch = True
+    Color = COLOR.RED
     Icon = "Arch_Amazon-Simple-Notification-Service_48"
 
     @staticmethod
     def create(name):
         resp = bt('sns').create_topic(Name=name)
         return resp['TopicArn']
+    
+    @staticmethod
+    def form_id(resp, id_field):
+        topic_arn = resp["TopicArn"]
+        name = topic_arn.split(':')[-1]
+        return name
+
+    @staticmethod
+    def aws_get_objects(id=None):
+        topics = bt('sns').list_topics()['Topics']
+
+        if id == None:
+            return topics
+        
+        for topic in topics:
+            if topic == 0:
+                return [topic]
+
+        return []
+    
+
+class CloudTrail_Trail(awsObject):
+    Color = COLOR.RED
+    Icon = "Arch_AWS-CloudTrail_48"
+
+    @staticmethod
+    def fields():
+        return {
+                    'Name': (CloudTrail_Trail, FIELD.ID),
+                    'S3BucketName': (S3_Bucket, FIELD.LINK),
+                    'KmsKeyId_Local': (KMS_Key, FIELD.LINK),
+                }
+
+    def __init__(self, aws, id_query, index, resp, do_auto_save=True):
+        super().__init__(aws, id_query, index, resp, do_auto_save)
+        
+        self.KmsKeyId_Local = self.KmsKeyId.split('/')[-1]
+
+    @staticmethod
+    def aws_get_objects(id=None):
+        response = bt('cloudtrail').describe_trails(**idpar(('trailNameList', id), PAR.LIST))
+        return response['trailList']
+
+
+class KMS_Key(awsObject):
+    Color = COLOR.CRIMSON
+    Icon = "Arch_AWS-Key-Management-Service_48"
+
+    @staticmethod
+    def fields():
+        return {
+                    'KeyId': (KMS_Key, FIELD.ID),
+                }
+
+    @staticmethod
+    def aws_get_objects(id=None):
+        if id==None:
+            response = bt('kms').list_keys()
+            return response['Keys']
+        else:
+            response = bt('kms').describe_key(KeyId=id)
+            return response['KeyMetadata']
 
 
 class IAM_User(awsObject):
@@ -1101,7 +1161,6 @@ class IAM_Group(awsObject):
 
 
 class IAM_Role(awsObject):
-    # DoNotFetch = True
     Icon = "IAMRole"
 
     @staticmethod
@@ -2311,8 +2370,12 @@ class Y3A(ObjectModel):
                 'SNS'     : [SNS_Topic],
                 'LOG'     : [Logs_LogGroup],
                 'EC'      : [ECR_Repository, ECR_Repository_Image, ECS_Cluster, ECS_Service, ECS_TaskDefinition_Family, ECS_TaskDefinition, ECS_Task, ECS_Task_Container],
+                'CT'      : [CloudTrail_Trail],
+                'KMS'     : [KMS_Key],
             }
         )
 
-        self.Classes["All"] = [x for x in self.Classes["ALL"] if x not in [EC2_Reservation, AWS_AMI, AWS_Region, AWS_AvailabilityZone]]
-        self.Classes["TS"] = [x for x in self.Classes["All"] if x not in [IAM_User, IAM_Group, IAM_Role, EC2_KeyPair, EC2_SecurityGroup, EC2_SecurityGroup_Rule, Logs_LogGroup]]
+        self.Classes["All"] = [x for x in self.Classes["ALL"] if x not in [IAM_User, IAM_Group, IAM_Role, EC2_Reservation, AWS_AMI, AWS_Region, AWS_AvailabilityZone]]
+        self.Classes["TS" ] = [x for x in self.Classes["All"] if x not in [EC2_KeyPair, EC2_SecurityGroup, EC2_SecurityGroup_Rule, Logs_LogGroup]]
+
+    # DoNotFetch = True TODO remove it!
