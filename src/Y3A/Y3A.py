@@ -155,7 +155,12 @@ class awsObject(ObjectModelItem):
         return view
     
     def get_href(self):
-        wrap = self.html_wrap()
+        try:
+            wrap = self.html_wrap()
+        except Exception as e:
+            print(f"get_href: An exception occurred: {type(e).__name__} - {e}")
+            wrap = ""
+
         if wrap == "":
             return ""
         
@@ -1163,20 +1168,29 @@ class IAM_User(awsObject):
     def fields():
         return {
                     'UserName': (IAM_User, FIELD.ID),
+                    'AttachedPolicies': ((IAM_Policy,), FIELD.LINK_IN),
                 }
 
     @staticmethod
     def aws_get_objects(id=None):
+        btiam = bt('iam')
+
         if id is None:
-            response = bt('iam').list_users()
-            return response['Users']
+            response = btiam.list_users()
+            items = response['Users']
         
         else:
-            response = bt('iam').get_user(UserName=id)
-            return [response['User']]
+            response = btiam.get_user(UserName=id)
+            items = [response['User']]
+
+        for item in items:
+            attached_policies = btiam.list_attached_user_policies(UserName=item["UserName"])['AttachedPolicies']
+            item["AttachedPolicies"] = [item["PolicyArn"].replace(":", "-") for item in attached_policies]
+
+        return items
 
     def html_wrap(self):
-        return awsObject.html_home("iam") + f"/users/details/{self.IAM_User}"
+        return awsObject.html_home("iam") + f"/users/details/{self.UserName}"
 
 
 
@@ -1187,20 +1201,33 @@ class IAM_Group(awsObject):
     def fields():
         return {
                     'GroupName': (IAM_Group, FIELD.ID),
+                    'Users': ((IAM_User,), FIELD.LINK_IN),
+                    'AttachedPolicies': ((IAM_Policy,), FIELD.LINK_IN),
                 }
 
     @staticmethod
     def aws_get_objects(id=None):
+        btiam = bt('iam')
+
         if id is None:
-            response = bt('iam').list_groups()
-            return response['Groups']
+            response = btiam.list_groups()
+            items = response['Groups']
         
         else:
-            response = bt('iam').get_group(GroupName=id)
-            return [response['Group']]
+            response = btiam.get_group(GroupName=id)
+            items = [response['Group']]
+        
+        for item in items:
+            response = btiam.get_group(GroupName=item["GroupName"])
+            item["Users"] = [user["UserName"] for user in response["Users"]]
+
+            attached_policies = btiam.list_attached_group_policies(GroupName=item["GroupName"])['AttachedPolicies']
+            item["AttachedPolicies"] = [item["PolicyArn"].replace(":", "-") for item in attached_policies]
+
+        return items
 
     def html_wrap(self):
-        return awsObject.html_home("iam") + f"/groups/details/{self.IAM_Group}"
+        return awsObject.html_home("iam") + f"/groups/details/{self.GroupName}"
 
 
 class IAM_Role(awsObject):
@@ -1210,17 +1237,26 @@ class IAM_Role(awsObject):
     def fields():
         return {
                'RoleName': (IAM_Role, FIELD.ID),
+               'AttachedPolicies': ((IAM_Policy,), FIELD.LINK_IN),
             }
 
     @staticmethod
     def aws_get_objects(id = None):
+        btiam = bt('iam')
+
         if id is None:
-            response = bt('iam').list_roles()
-            return response['Roles']
+            response = btiam.list_roles()
+            items = response['Roles']
         
         else:
-            response = bt('iam').get_role(RoleName=id)
-            return [response['Role']]
+            response = btiam.get_role(RoleName=id)
+            items = [response['Role']]
+
+        for item in items:
+            attached_policies = btiam.list_attached_role_policies(RoleName=item["RoleName"])['AttachedPolicies']
+            item["AttachedPolicies"] = [item["PolicyArn"].replace(":", "-") for item in attached_policies]
+
+        return items
 
     @staticmethod
     def create(name):
@@ -1266,6 +1302,34 @@ class IAM_Role(awsObject):
             btiam.detach_role_policy(RoleName = id, PolicyArn=policy['PolicyArn'])
 
         btiam.delete_role(RoleName = id)
+
+
+class IAM_Policy(awsObject):
+    Icon = "IAMRole"
+
+    @staticmethod
+    def form_id(resp, id_field):
+        arn = resp["Arn"]
+        arn = arn.replace(":", "-")
+        return arn
+
+    @staticmethod
+    def aws_get_objects(id = None, scope = 'All', only_attached = True):
+        btiam = bt('iam')
+        if id is None:
+            response = btiam.list_policies(
+                Scope=scope, # 'All'|'AWS'|'Local',
+                OnlyAttached=only_attached,
+                #PolicyUsageFilter = 'PermissionsPolicy'|'PermissionsBoundary'
+            )
+            return response['Policies']
+        
+        else:
+            # owner, name = s.split('-', 1)
+            # PolicyArn=f"arn:aws:iam::'{owner}':policy/service-role/{name}"
+
+            response = btaim.get_policy(PolicyArn=id)
+            return [response['Policy']]
 
 
 class Lambda_Function(awsObject):
@@ -2425,7 +2489,7 @@ class Y3A(ObjectModel):
                 'DrawRDS' : 'EC2_VPC, EC2_Subnet, RDS'
             },
             {
-                'IAM'     : [IAM_User, IAM_Group, IAM_Role],
+                'IAM'     : [IAM_User, IAM_Group, IAM_Role, IAM_Policy],
                 'VPC'     : [EC2_KeyPair, EC2_VPC, EC2_InternetGateway, EC2_VPCGatewayAttachment],
                 'SN'      : [EC2_Subnet],
                 'RT'      : [EC2_RouteTable, EC2_Route, EC2_RouteTable_Association],
