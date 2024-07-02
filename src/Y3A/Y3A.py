@@ -39,8 +39,9 @@ class PAR:
 class COLOR:
     ''' Identyfiers for the param way '''
     ORANGE    = "#FFC18A"
-    RED       = "#F9BBD9"
-    RED_DARK  = "#FF99CC"
+    RED_DARK  = "#E76E6F"
+    RED       = "#F29F9B"
+    RED_LIGHT = "#FDD0C7"
     LILA      = "#f2c4f4"
     BLUE      = "#d7c1ff"
     BLUE_DARK = "#c19fff"
@@ -1162,7 +1163,9 @@ class KMS_Key(awsObject):
 
 
 class IAM_User(awsObject):
-    Icon = "Res_User_48_Light"
+    Color = COLOR.RED_DARK
+    Icon = "iam_user"
+    
 
     @staticmethod
     def fields():
@@ -1185,7 +1188,8 @@ class IAM_User(awsObject):
 
         for item in items:
             attached_policies = btiam.list_attached_user_policies(UserName=item["UserName"])['AttachedPolicies']
-            item["AttachedPolicies"] = [item["PolicyArn"].replace(":", "-") for item in attached_policies]
+            if len(attached_policies) > 0:
+                item["AttachedPolicies"] = [item["PolicyArn"].replace(":", "-") for item in attached_policies]
 
         return items
 
@@ -1195,7 +1199,8 @@ class IAM_User(awsObject):
 
 
 class IAM_Group(awsObject):
-    Icon = "Res_Users_48_Light"
+    Color = COLOR.RED_DARK
+    Icon = "iam_group"
 
     @staticmethod
     def fields():
@@ -1222,7 +1227,8 @@ class IAM_Group(awsObject):
             item["Users"] = [user["UserName"] for user in response["Users"]]
 
             attached_policies = btiam.list_attached_group_policies(GroupName=item["GroupName"])['AttachedPolicies']
-            item["AttachedPolicies"] = [item["PolicyArn"].replace(":", "-") for item in attached_policies]
+            if len(attached_policies) > 0:
+                item["AttachedPolicies"] = [item["PolicyArn"].replace(":", "-") for item in attached_policies]
 
         return items
 
@@ -1231,7 +1237,12 @@ class IAM_Group(awsObject):
 
 
 class IAM_Role(awsObject):
-    Icon = "IAMRole"
+    Color = COLOR.RED
+    Icon = "iam_role"
+
+    @staticmethod
+    def arn_to_id(arn):
+        return arn.rpartition('/')[2]
 
     @staticmethod
     def fields():
@@ -1254,7 +1265,8 @@ class IAM_Role(awsObject):
 
         for item in items:
             attached_policies = btiam.list_attached_role_policies(RoleName=item["RoleName"])['AttachedPolicies']
-            item["AttachedPolicies"] = [item["PolicyArn"].replace(":", "-") for item in attached_policies]
+            if len(attached_policies) > 0:
+                item["AttachedPolicies"] = [item["PolicyArn"].replace(":", "-") for item in attached_policies]
 
         return items
 
@@ -1283,7 +1295,7 @@ class IAM_Role(awsObject):
 
         btaim.attach_role_policy(
             RoleName = name,
-            PolicyArn = 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+            PolicyArn = 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole' # TODO
         )
 
         return resp['Role']['RoleName']
@@ -1305,13 +1317,23 @@ class IAM_Role(awsObject):
 
 
 class IAM_Policy(awsObject):
-    Icon = "IAMRole"
+    Color = COLOR.RED_LIGHT
+    Icon = "iam_policy"
+
+    @staticmethod
+    def arn_to_id(arn):
+        return arn.replace(":", "-")
+
+    @staticmethod
+    def id_to_arn(id):
+        spl = id.split("/")
+        spl[0] = spl[0].replace("-", ":")
+        arn = "/".join(spl);
+        return arn
 
     @staticmethod
     def form_id(resp, id_field):
-        arn = resp["Arn"]
-        arn = arn.replace(":", "-")
-        return arn
+        return IAM_Policy.arn_to_id(resp["Arn"])
 
     @staticmethod
     def aws_get_objects(id = None, scope = 'All', only_attached = True):
@@ -1325,11 +1347,115 @@ class IAM_Policy(awsObject):
             return response['Policies']
         
         else:
-            # owner, name = s.split('-', 1)
-            # PolicyArn=f"arn:aws:iam::'{owner}':policy/service-role/{name}"
-
-            response = btaim.get_policy(PolicyArn=id)
+            arn = IAM_Policy.id_to_arn(id)
+            response = btiam.get_policy(PolicyArn=arn)
             return [response['Policy']]
+
+    def get_view(self):
+        _, _, last_part = self.Arn.rpartition('/')
+        return last_part
+    
+    def html_wrap(self):
+        return awsObject.html_home("iam") + f"/policies/{self.Arn}"
+
+
+class IAM_UserPolicy(awsObject):
+    Color = COLOR.RED_LIGHT
+    Icon = "iam_policy"
+
+    @staticmethod
+    def fields():
+        return {
+            '_parent': (IAM_User, FIELD.OWNER),
+            'PolicyName': (str, FIELD.VIEW),
+        }
+
+    @staticmethod
+    def form_id(resp, id_field):
+        return resp["_parent"] + ID_DV + resp["PolicyName"]
+
+    @staticmethod
+    def aws_get_objects(id = None):
+        return IAM_User.get_objects_by_index(id, IAM_UserPolicy, "_id")
+
+    @staticmethod
+    def get_objects_of_parent(parent, id):
+        btiam = bt('iam')
+        res = []
+        policies = btiam.list_user_policies(UserName=parent)["PolicyNames"]
+        for name in policies:
+            policy = btiam.get_user_policy(UserName=parent, PolicyName=name)
+            res.append(policy)
+        return res
+
+    def html_wrap(self):
+        return awsObject.html_home("iam") + f"/users/details/{self.UserName}/editPolicy/{self.PolicyName}?step=addPermissions"
+    
+
+class IAM_GroupPolicy(awsObject):
+    Color = COLOR.RED_LIGHT
+    Icon = "iam_policy"
+
+    @staticmethod
+    def fields():
+        return {
+            '_parent': (IAM_Group, FIELD.OWNER),
+            'PolicyName': (str, FIELD.VIEW),
+        }
+
+    @staticmethod
+    def form_id(resp, id_field):
+        return resp["_parent"] + ID_DV + resp["PolicyName"]
+
+    @staticmethod
+    def aws_get_objects(id = None):
+        return IAM_Group.get_objects_by_index(id, IAM_GroupPolicy, "_id")
+
+    @staticmethod
+    def get_objects_of_parent(parent, id):
+        btiam = bt('iam')
+        res = []
+        policies = btiam.list_group_policies(GroupName=parent)["PolicyNames"]
+        for name in policies:
+            policy = btiam.get_group_policy(GroupName=parent, PolicyName=name)
+            res.append(policy)
+        return res
+
+    def html_wrap(self):
+        return awsObject.html_home("iam") + f"/groups/details/{self.GroupName}/editPolicy/{self.PolicyName}?step=addPermissions"
+
+
+class IAM_RolePolicy(awsObject):
+    Color = COLOR.RED_LIGHT
+    Icon = "iam_policy"
+
+    @staticmethod
+    def fields():
+        return {
+            '_parent': (IAM_Role, FIELD.OWNER),
+            'PolicyName': (str, FIELD.VIEW),
+        }
+
+    @staticmethod
+    def form_id(resp, id_field):
+        return resp["_parent"] + ID_DV + resp["PolicyName"]
+
+    @staticmethod
+    def aws_get_objects(id = None):
+        return IAM_Role.get_objects_by_index(id, IAM_RolePolicy, "_id")
+
+    @staticmethod
+    def get_objects_of_parent(parent, id):
+        btiam = bt('iam')
+        res = []
+        policies = btiam.list_role_policies(RoleName=parent)["PolicyNames"]
+        for name in policies:
+            policy = btiam.get_role_policy(RoleName=parent, PolicyName=name)
+            res.append(policy)
+        return res
+
+    def html_wrap(self):
+        return awsObject.html_home("iam") + f"/roles/details/{self.RoleName}/editPolicy/{self.PolicyName}?step=addPermissions"
 
 
 class Lambda_Function(awsObject):
@@ -1342,13 +1468,15 @@ class Lambda_Function(awsObject):
         return {
                     'FunctionName': (Lambda_Function, FIELD.ID),
                     'Tags': ({"Key" : "Value"}),
-                    'LogGroup': (Logs_LogGroup, FIELD.LINK),   
+                    'LogGroup': (Logs_LogGroup, FIELD.LINK),
+                    '_RoleId': (IAM_Role, FIELD.LINK_IN),
                 }
 
     def __init__(self, aws, id_query, index, resp, do_auto_save=True):
         super().__init__(aws, id_query, index, resp, do_auto_save)
         
         self.LogGroup = self['LoggingConfig']['LogGroup']
+        self._RoleId = IAM_Role.arn_to_id(self.Role)
 
     @staticmethod
     def aws_get_objects(id=None):
@@ -1875,7 +2003,7 @@ class CloudFormation_StackResource(awsObject):
 
 class ApiGateway_RestApi(awsObject):
     Icon = "Arch_Amazon-API-Gateway_48"
-    Color = COLOR.RED
+    Color = COLOR.RED_DARK
 
     @staticmethod
     def fields():
@@ -1900,7 +2028,7 @@ class ApiGateway_RestApi(awsObject):
 
 class ApiGateway_Resource(awsObject):
     Icon = "Arch_Amazon-API-Gateway_48-Resource"
-    Color = COLOR.RED_DARK
+    Color = COLOR.RED
 
     @staticmethod
     def fields():
@@ -2250,11 +2378,19 @@ class ECS_TaskDefinition(awsObject):
         return {
             "ListName" : (str, FIELD.LIST_NAME),
             'family': (ECS_TaskDefinition_Family, FIELD.LIST_ITEM),
+            '_executionRoleArnID': (IAM_Role, FIELD.LINK_IN),
+            '_taskRoleArn': (IAM_Role, FIELD.LINK_IN),
         }
+
+
+    def __init__(self, aws, id_query, index, resp, do_auto_save=True):
+        super().__init__(aws, id_query, index, resp, do_auto_save)
+        self._executionRoleArnID = IAM_Role.arn_to_id(self.executionRoleArn)
+        self._taskRoleArn = IAM_Role.arn_to_id(self.taskRoleArn)
 
     @staticmethod
     def form_id(resp, id_field):
-        return f"{resp["family"]}:{resp["revision"]}"
+        return f"{resp["family"]}{ID_DV}{resp["revision"]}"
 
     @staticmethod
     def aws_get_objects(id = None):
@@ -2489,7 +2625,7 @@ class Y3A(ObjectModel):
                 'DrawRDS' : 'EC2_VPC, EC2_Subnet, RDS'
             },
             {
-                'IAM'     : [IAM_User, IAM_Group, IAM_Role, IAM_Policy],
+                'IAM'     : [IAM_User, IAM_Group, IAM_Role, IAM_Policy, IAM_UserPolicy, IAM_GroupPolicy, IAM_RolePolicy],
                 'VPC'     : [EC2_KeyPair, EC2_VPC, EC2_InternetGateway, EC2_VPCGatewayAttachment],
                 'SN'      : [EC2_Subnet],
                 'RT'      : [EC2_RouteTable, EC2_Route, EC2_RouteTable_Association],
@@ -2514,7 +2650,7 @@ class Y3A(ObjectModel):
             }
         )
 
-        self.Classes["All"] = [x for x in self.Classes["ALL"] if x not in [IAM_User, IAM_Group, IAM_Role, EC2_Reservation, AWS_AMI, AWS_Region, AWS_AvailabilityZone]]
+        self.Classes["All"] = [x for x in self.Classes["ALL"] if x not in [IAM_User, IAM_Group, IAM_Role, IAM_Policy, IAM_UserPolicy, IAM_GroupPolicy, IAM_RolePolicy, EC2_Reservation, AWS_AMI, AWS_Region, AWS_AvailabilityZone]]
         self.Classes["TS" ] = [x for x in self.Classes["All"] if x not in [EC2_KeyPair, EC2_SecurityGroup, EC2_SecurityGroup_Rule, Logs_LogGroup]]
 
     # DoNotFetch = True TODO remove it!
